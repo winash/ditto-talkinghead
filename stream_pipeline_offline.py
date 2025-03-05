@@ -179,9 +179,13 @@ class StreamSDK:
             online_mode=self.online_mode,
             v_min_max_for_clip=self.v_min_max_for_clip,
             smo_k_d=self.smo_k_d,
-            emotion_intensity=self.emotion_intensity,  # New parameter for emotional expressions
-            noise_guidance=self.noise_guidance,        # New parameter for more expressive noise
+            emotion_intensity=self.emotion_intensity,  # Parameter for emotional expressions
+            digital_twin_mode=self.digital_twin_mode,  # Enable digital twin mode
         )
+        
+        # Load digital twin model if specified
+        if self.digital_twin_mode and self.digital_twin_model_dir:
+            self.load_digital_twin(self.digital_twin_model_dir)
 
         # ======== Setup Motion Stitch ========
         is_image_flag = source_info["is_image_flag"]
@@ -238,6 +242,10 @@ class StreamSDK:
         # Setup background motion parameters
         self.bg_motion_enabled = kwargs.get("bg_motion_enabled", True)
         self.bg_motion_intensity = kwargs.get("bg_motion_intensity", 0.005)
+        
+        # Setup digital twin parameters
+        self.digital_twin_mode = kwargs.get("digital_twin_mode", False)
+        self.digital_twin_model_dir = kwargs.get("digital_twin_model_dir", None)
         
         # Create queues for worker threads
         self.audio2motion_queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
@@ -608,6 +616,45 @@ class StreamSDK:
         
         self.motion_stitch_queue.put(None)
 
+    def load_digital_twin(self, model_dir):
+        """
+        Load a personalized digital twin model
+        
+        Args:
+            model_dir: Directory containing the personalized model
+        """
+        import os
+        import torch
+        import numpy as np
+        
+        # Load personal style parameters
+        personal_style_path = os.path.join(model_dir, "personal_style.npy")
+        if os.path.exists(personal_style_path):
+            personal_style = np.load(personal_style_path, allow_pickle=True).item()
+            print("Loaded personal style parameters")
+        else:
+            personal_style = None
+            print("No personal style parameters found")
+        
+        # Load personalized model if available
+        model_path = os.path.join(model_dir, "lmdm_personalized_final.pt")
+        if os.path.exists(model_path) and self.audio2motion.lmdm.model_type == "pytorch":
+            print(f"Loading personalized model from {model_path}")
+            # Load the state dict into the existing model
+            self.audio2motion.lmdm.model.load_state_dict(torch.load(model_path))
+        elif os.path.exists(model_path):
+            print(f"Found model at {model_path}, but current model type is {self.audio2motion.lmdm.model_type}")
+            print("Can only load PyTorch models. Using style parameters only.")
+            
+        # Apply personal style parameters to audio2motion
+        if personal_style is not None:
+            print("Applying personal style parameters")
+            self.audio2motion.personal_style = personal_style
+            # Ensure digital twin mode is active
+            self.audio2motion.digital_twin_mode = True
+        
+        print("Digital twin loaded successfully")
+    
     def close(self):
         # flush frames
         self.audio2motion_queue.put(None)

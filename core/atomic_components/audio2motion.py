@@ -85,6 +85,10 @@ class Audio2Motion:
         # For emotion detection and processing
         self.emotion_history = []
         self.emotion_window_size = 15  # Keep track of recent emotion states
+        
+        # Digital twin personalization support
+        self.personal_style = None
+        self.digital_twin_mode = False
 
     def setup(
         self, 
@@ -97,12 +101,14 @@ class Audio2Motion:
         v_min_max_for_clip=None,
         smo_k_d=2,  # Lower smoothing for more dynamic expressions
         emotion_intensity=1.0,  # Control overall emotional intensity
+        digital_twin_mode=False,  # Enable digital twin personalization
     ):
         self.smo_k_d = smo_k_d
         self.overlap_v2 = overlap_v2
         self.seq_frames = self.lmdm.seq_frames
         self.valid_clip_len = self.seq_frames - self.overlap_v2
         self.emotion_intensity = emotion_intensity
+        self.digital_twin_mode = digital_twin_mode
         
         # Apply emotion intensity to expression amplification factors
         self.current_exp_amplification = {k: 1.0 + (v - 1.0) * self.emotion_intensity 
@@ -544,10 +550,37 @@ class Audio2Motion:
             if pred_kp_seq is not None:
                 self.cache_hits += 1
         
+        # Apply personalized digital twin logic if enabled
+        if self.digital_twin_mode and self.personal_style is not None:
+            # Apply personal style guidance to LMDM model
+            if hasattr(self.lmdm, 'noise_list') and 'expression_bias' in self.personal_style:
+                exp_start, exp_end = 197, 260  # Expression dimensions
+                exp_bias = self.personal_style['expression_bias']
+                
+                # Apply personalized expression bias to noise generation
+                for i in range(len(self.lmdm.noise_list)):
+                    # Scale bias based on expression dimensions
+                    if len(exp_bias) == (exp_end - exp_start):
+                        bias_effect = exp_bias * 0.75  # Control strength of personal style
+                        self.lmdm.noise_list[i][:, :, exp_start:exp_end] += bias_effect
+
         # Generate base motion sequence if not cached
         if pred_kp_seq is None:
             self.cache_misses += 1
             pred_kp_seq = self.lmdm(self.kp_cond, aud_cond, self.sampling_timesteps)
+            
+            # Apply personalized style transformations
+            if self.digital_twin_mode and self.personal_style is not None:
+                # Apply motion scale factors if available
+                if 'motion_scale' in self.personal_style:
+                    motion_scale = self.personal_style['motion_scale']
+                    if motion_scale is not None and len(motion_scale) == pred_kp_seq.shape[2]:
+                        # Apply personalized scaling to make motion match personal style
+                        # Center around current mean to preserve overall position
+                        for i in range(pred_kp_seq.shape[2]):
+                            if 0.5 <= motion_scale[i] <= 2.0:  # Safety bounds
+                                mean_val = np.mean(pred_kp_seq[0, :, i])
+                                pred_kp_seq[0, :, i] = (pred_kp_seq[0, :, i] - mean_val) * motion_scale[i] + mean_val
             
             # Cache the result for future use
             if cache_key:

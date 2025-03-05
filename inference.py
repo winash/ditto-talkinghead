@@ -90,6 +90,12 @@ if __name__ == "__main__":
                        help="Enable subtle background motion for more natural look")
     parser.add_argument("--bg_motion_intensity", type=float, default=0.005,
                        help="Background motion intensity (0.001-0.02, higher=more movement)")
+                       
+    # Digital twin parameters
+    parser.add_argument("--digital_twin_mode", action="store_true", default=False,
+                       help="Enable digital twin personalization")
+    parser.add_argument("--digital_twin_model_dir", type=str, default=None,
+                       help="Path to trained digital twin model directory")
     
     # Performance optimization parameters
     parser.add_argument("--optimize_speed", action="store_true", 
@@ -128,7 +134,9 @@ if __name__ == "__main__":
         "cache_motion": args.cache_motion,
         "batch_size": args.batch_size,
         "bg_motion_enabled": args.bg_motion_enabled,
-        "bg_motion_intensity": args.bg_motion_intensity
+        "bg_motion_intensity": args.bg_motion_intensity,
+        "digital_twin_mode": args.digital_twin_mode,
+        "digital_twin_model_dir": args.digital_twin_model_dir
     }
     more_kwargs = {"setup_kwargs": setup_kwargs}
     
@@ -142,6 +150,11 @@ if __name__ == "__main__":
     print("\nBACKGROUND SETTINGS:")
     print(f"  - Background motion: {'Enabled' if args.bg_motion_enabled else 'Disabled'}")
     print(f"  - Motion intensity: {args.bg_motion_intensity:.3f}")
+    
+    print("\nDIGITAL TWIN SETTINGS:")
+    print(f"  - Digital twin mode: {'Enabled' if args.digital_twin_mode else 'Disabled'}")
+    if args.digital_twin_mode and args.digital_twin_model_dir:
+        print(f"  - Model directory: {args.digital_twin_model_dir}")
     
     print("\nPERFORMANCE SETTINGS:")
     print(f"  - Speed optimization: {'Enabled' if args.optimize_speed else 'Disabled'}")
