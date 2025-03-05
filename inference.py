@@ -85,6 +85,12 @@ if __name__ == "__main__":
     parser.add_argument("--smo_k_d", type=int, default=2,
                        help="Smoothing kernel size (1-3, lower is more dynamic)")
     
+    # Background motion parameters
+    parser.add_argument("--bg_motion_enabled", action="store_true", default=True,
+                       help="Enable subtle background motion for more natural look")
+    parser.add_argument("--bg_motion_intensity", type=float, default=0.005,
+                       help="Background motion intensity (0.001-0.02, higher=more movement)")
+    
     # Performance optimization parameters
     parser.add_argument("--optimize_speed", action="store_true", 
                        help="Enable additional speed optimizations (may slightly reduce quality)")
@@ -120,7 +126,9 @@ if __name__ == "__main__":
         "smo_k_d": args.smo_k_d,
         "optimize_speed": args.optimize_speed,
         "cache_motion": args.cache_motion,
-        "batch_size": args.batch_size
+        "batch_size": args.batch_size,
+        "bg_motion_enabled": args.bg_motion_enabled,
+        "bg_motion_intensity": args.bg_motion_intensity
     }
     more_kwargs = {"setup_kwargs": setup_kwargs}
     
@@ -130,6 +138,10 @@ if __name__ == "__main__":
     print(f"  - Expression detail: {args.sampling_timesteps}")
     print(f"  - Expression dynamics: {4-args.smo_k_d}/3")
     print(f"  - Emotional guidance: {args.noise_guidance:.2f}")
+    
+    print("\nBACKGROUND SETTINGS:")
+    print(f"  - Background motion: {'Enabled' if args.bg_motion_enabled else 'Disabled'}")
+    print(f"  - Motion intensity: {args.bg_motion_intensity:.3f}")
     
     print("\nPERFORMANCE SETTINGS:")
     print(f"  - Speed optimization: {'Enabled' if args.optimize_speed else 'Disabled'}")

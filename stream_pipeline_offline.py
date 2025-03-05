@@ -213,6 +213,11 @@ class StreamSDK:
         self.tmp_output_path = output_path + ".tmp.mp4"
         self.writer = VideoWriterByImageIO(self.tmp_output_path)
         self.writer_pbar = tqdm(desc="writer")
+        
+        # ======== Initialize PutBack with Background Motion ========
+        self.putback = PutBack(mask_template_path=None, bg_motion_intensity=self.bg_motion_intensity)
+        # Enable/disable background motion based on parameter
+        self.putback.enable_bg_motion(self.bg_motion_enabled)
 
         # ======== Audio Feat Buffer ========
         if self.online_mode:
@@ -230,6 +235,11 @@ class StreamSDK:
         self.worker_exception = None
         self.stop_event = threading.Event()
 
+        # Setup background motion parameters
+        self.bg_motion_enabled = kwargs.get("bg_motion_enabled", True)
+        self.bg_motion_intensity = kwargs.get("bg_motion_intensity", 0.005)
+        
+        # Create queues for worker threads
         self.audio2motion_queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
         self.motion_stitch_queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
         self.warp_f3d_queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
