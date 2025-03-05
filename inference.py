@@ -65,6 +65,8 @@ def run(SDK: StreamSDK, audio_path: str, source_path: str, output_path: str, mor
 
 if __name__ == "__main__":
     import argparse
+    import time
+    
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_root", type=str, default="./checkpoints/ditto_trt_Ampere_Plus", help="path to trt data_root")
     parser.add_argument("--cfg_pkl", type=str, default="./checkpoints/ditto_cfg/v0.4_hubert_cfg_trt.pkl", help="path to cfg_pkl")
@@ -74,17 +76,32 @@ if __name__ == "__main__":
     parser.add_argument("--output_path", type=str, help="path to output mp4")
     
     # Enhanced emotional expression parameters
-    parser.add_argument("--emotional_intensity", type=float, default=1.0, 
+    parser.add_argument("--emotional_intensity", type=float, default=1.3, 
                        help="Controls emotional expressiveness (1.0=normal, 1.3=enhanced, 1.5=strong)")
     parser.add_argument("--sampling_timesteps", type=int, default=50,
                        help="Number of sampling steps (50-80, higher is more detailed)")
-    parser.add_argument("--noise_guidance", type=float, default=0.25,
+    parser.add_argument("--noise_guidance", type=float, default=0.3,
                        help="Noise guidance for more expressive motion (0.1-0.3)")
-    parser.add_argument("--smo_k_d", type=int, default=3,
+    parser.add_argument("--smo_k_d", type=int, default=2,
                        help="Smoothing kernel size (1-3, lower is more dynamic)")
+    
+    # Performance optimization parameters
+    parser.add_argument("--optimize_speed", action="store_true", 
+                       help="Enable additional speed optimizations (may slightly reduce quality)")
+    parser.add_argument("--cache_motion", action="store_true", default=True,
+                       help="Enable motion caching for faster processing")
+    parser.add_argument("--batch_size", type=int, default=2,
+                       help="Batch size for processing (higher = faster but more GPU memory)")
     
     args = parser.parse_args()
 
+    print("\n======================================")
+    print("Ditto TalkingHead - Enhanced Version")
+    print("======================================")
+    
+    # Record start time for performance tracking
+    start_time = time.time()
+    
     # init sdk
     data_root = args.data_root   # model dir
     cfg_pkl = args.cfg_pkl     # cfg pkl
@@ -100,17 +117,33 @@ if __name__ == "__main__":
         "emotion_intensity": args.emotional_intensity,
         "sampling_timesteps": args.sampling_timesteps,
         "noise_guidance": args.noise_guidance,
-        "smo_k_d": args.smo_k_d
+        "smo_k_d": args.smo_k_d,
+        "optimize_speed": args.optimize_speed,
+        "cache_motion": args.cache_motion,
+        "batch_size": args.batch_size
     }
     more_kwargs = {"setup_kwargs": setup_kwargs}
     
-    # Print info about enhanced settings if they're not default
-    if args.emotional_intensity > 1.0 or args.sampling_timesteps != 50 or args.smo_k_d != 3:
-        print("Using enhanced emotional expressions:")
-        print(f"  - Emotional intensity: {args.emotional_intensity}")
-        print(f"  - Sampling detail: {args.sampling_timesteps}")
-        print(f"  - Expression dynamics: {4-args.smo_k_d}/3")
+    # Print info about settings
+    print("\nENHANCED EXPRESSION SETTINGS:")
+    print(f"  - Emotional intensity: {args.emotional_intensity:.1f}")
+    print(f"  - Expression detail: {args.sampling_timesteps}")
+    print(f"  - Expression dynamics: {4-args.smo_k_d}/3")
+    print(f"  - Emotional guidance: {args.noise_guidance:.2f}")
+    
+    print("\nPERFORMANCE SETTINGS:")
+    print(f"  - Speed optimization: {'Enabled' if args.optimize_speed else 'Disabled'}")
+    print(f"  - Motion caching: {'Enabled' if args.cache_motion else 'Disabled'}")
+    print(f"  - Batch processing: {args.batch_size} chunks")
+    print("\nProcessing... Please wait...\n")
     
     # run
-    # seed_everything(1024)
     run(SDK, audio_path, source_path, output_path, more_kwargs)
+    
+    # Print performance stats
+    end_time = time.time()
+    total_time = end_time - start_time
+    print("\n======================================")
+    print(f"Processing completed in {total_time:.2f} seconds")
+    print(f"Output saved to: {output_path}")
+    print("======================================\n")

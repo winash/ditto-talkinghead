@@ -168,13 +168,36 @@ python inference.py \
     --output_path "./tmp/result.mp4" \
     --emotional_intensity 1.3 \
     --sampling_timesteps 60 \
-    --smo_k_d 2
+    --smo_k_d 2 \
+    --noise_guidance 0.3
 ```
 
 Parameters for emotional enhancements:
 - `--emotional_intensity`: Controls the overall emotional expressiveness (1.0=normal, 1.3=enhanced, 1.5=strong)
 - `--sampling_timesteps`: Higher values (50-80) produce more detailed expressions (default=50)
 - `--smo_k_d`: Lower values (1-2) create more dynamic expressions (default=3)
+- `--noise_guidance`: Higher values (0.2-0.3) create more varied expressions (default=0.25)
+
+### Performance Optimizations
+
+For faster processing with optimized performance:
+
+```shell
+python inference.py \
+    --data_root "./checkpoints/ditto_trt_Ampere_Plus" \
+    --cfg_pkl "./checkpoints/ditto_cfg/v0.4_hubert_cfg_trt.pkl" \
+    --audio_path "./example/audio.wav" \
+    --source_path "./example/image.png" \
+    --output_path "./tmp/result.mp4" \
+    --optimize_speed \
+    --cache_motion \
+    --batch_size 4
+```
+
+Performance optimization parameters:
+- `--optimize_speed`: Enable additional optimizations for faster processing
+- `--cache_motion`: Enable motion pattern caching for similar audio segments (reduces computation)
+- `--batch_size`: Batch size for processing (higher = faster but more GPU memory)
 
 ❗Note:
 

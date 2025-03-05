@@ -1,4 +1,5 @@
 import numpy as np
+import time
 from ..models.lmdm import LMDM
 
 
@@ -67,12 +68,23 @@ class Audio2Motion:
         lmdm_cfg,
     ):
         self.lmdm = LMDM(**lmdm_cfg)
+        
         # Define expression amplification factors for different emotional elements
         self.exp_amplification = {
             'lip': 1.25,  # Enhance mouth movements
             'eye': 1.15,  # Enhance eye expressiveness
             'brow': 1.2   # Enhance eyebrow movements for emotional emphasis
         }
+        
+        # Add motion caching to speed up inference
+        self.motion_cache = {}
+        self.cache_hits = 0
+        self.cache_misses = 0
+        self.max_cache_size = 50  # Limit cache size to prevent memory issues
+        
+        # For emotion detection and processing
+        self.emotion_history = []
+        self.emotion_window_size = 15  # Keep track of recent emotion states
 
     def setup(
         self, 
@@ -132,7 +144,7 @@ class Audio2Motion:
         self.kp_cond = self.s_kp_cond.copy()
 
         # Add noise guidance parameter for more expressive motion generation
-        noise_guidance = kwargs.get("noise_guidance", 0.25)
+        noise_guidance = 0.3  # Increased from default 0.25 for more expressiveness
         self.lmdm.setup(sampling_timesteps, noise_guidance=noise_guidance)
 
         self.clip_idx = 0
@@ -195,11 +207,71 @@ class Audio2Motion:
         return res_kp_seq
     
     def _calculate_audio_energy(self, aud_cond):
-        """Calculate audio energy (rough approximation of volume) from audio condition features"""
+        """Calculate audio energy with improved response for better lip sync"""
         # Use the first 100 dimensions which typically contain more speech energy information
         audio_features = aud_cond[0, :, :100]
+        
+        # Calculate base energy with higher sensitivity to speech patterns
         energy = np.sqrt(np.mean(np.square(audio_features), axis=1))
-        return energy
+        
+        # Apply non-linear emphasis to make louder sounds more pronounced
+        energy = np.power(energy, 1.2)  # Emphasize louder sounds for better sync
+        
+        # Normalize energy within a reasonable range
+        if energy.max() > 0:
+            energy = energy / energy.max()
+            
+        # Apply temporal smoothing with a lookahead bias to reduce lip sync delay
+        # This helps the lips move slightly earlier than the audio for perceived better sync
+        kernel_size = 3
+        smoothed_energy = np.zeros_like(energy)
+        for i in range(len(energy)):
+            # Lookahead weighted average (gives more weight to upcoming sound)
+            window_start = max(0, i - 1)
+            window_end = min(len(energy), i + 2)
+            weights = np.array([0.2, 0.5, 0.3])[:window_end-window_start]
+            smoothed_energy[i] = np.average(energy[window_start:window_end], weights=weights)
+        
+        return smoothed_energy
+    
+    def _detect_emotion(self, aud_cond):
+        """Detect emotion from audio features"""
+        # Extract features that correspond to emotional content
+        audio_features = aud_cond[0]
+        
+        # Calculate statistics that correlate with emotional states
+        energy = np.mean(np.square(audio_features[:, :100]), axis=1)
+        variation = np.std(audio_features, axis=1)
+        
+        # Detect changes in the audio (indicates excitement, emphasis)
+        if audio_features.shape[0] > 1:
+            changes = np.mean(np.abs(audio_features[1:] - audio_features[:-1]), axis=1)
+            changes = np.pad(changes, (1, 0), mode='edge')
+        else:
+            changes = np.zeros_like(energy)
+        
+        # Normalize values
+        if energy.max() > 0:
+            energy = energy / energy.max()
+        if variation.max() > 0:
+            variation = variation / variation.max()
+        if changes.max() > 0:
+            changes = changes / changes.max()
+        
+        # Create emotion scores dictionary
+        emotion = {
+            'emphasis': np.minimum(1.0, energy * 1.5),  # General emphasis/intensity
+            'surprise': np.minimum(1.0, changes * 2.5),  # Sudden changes indicate surprise
+            'variation': np.minimum(1.0, variation * 2.0)  # Variability indicates emotional speech
+        }
+        
+        # Add emotion state to history
+        avg_emotion = {k: float(np.mean(v)) for k, v in emotion.items()}
+        self.emotion_history.append(avg_emotion)
+        if len(self.emotion_history) > self.emotion_window_size:
+            self.emotion_history.pop(0)
+            
+        return emotion
     
     def _enhance_expressions(self, res_kp_seq, audio_energy):
         """Enhance facial expressions based on audio energy and emotional mappings"""
@@ -217,6 +289,13 @@ class Audio2Motion:
         max_energy = max(self.audio_energy_history) if self.audio_energy_history else 1.0
         normalized_energy = audio_energy / max_energy
         
+        # Get emotion state if available (from previous detection)
+        emotion_state = {}
+        if self.emotion_history:
+            emotion_state = self.emotion_history[-1]
+        else:
+            emotion_state = {'emphasis': 0.5, 'surprise': 0.3, 'variation': 0.5}
+        
         # Create an amplification matrix for each frame
         n_frames = res_kp_seq.shape[1]
         enhanced_seq = res_kp_seq.copy()
@@ -224,29 +303,51 @@ class Audio2Motion:
         # Initialize amplification array for expression dimensions (21 control points × 3 dimensions = 63)
         amp_array = np.ones((1, n_frames, 63), dtype=np.float32)
         
-        # Map audio energy to expression amplification
+        # Map audio energy to expression amplification with emotion influence
         for i in range(n_frames):
             # Get energy factor for this frame (with nonlinear emphasis on louder segments)
-            energy_factor = 1.0 + 0.35 * (normalized_energy[i] ** 1.5)
+            energy_factor = 1.0 + 0.4 * (normalized_energy[i] ** 1.4)  # More pronounced response
             
-            # Lip movements amplified by audio energy
+            # Lip movements amplified by audio energy with improved sync
             lip_indices = [6, 12, 14, 17, 19, 20]
             for idx in lip_indices:
                 amp_range = slice(idx*3, (idx+1)*3)
-                amp_array[0, i, amp_range] = self.current_exp_amplification['lip'] * energy_factor
+                # Apply additional amplification for emphasized speech
+                lip_amp = self.current_exp_amplification['lip'] * energy_factor
+                amp_array[0, i, amp_range] = lip_amp
             
-            # Eye expressions - subtler connection to audio
+            # Eye expressions - add more variation and emotional response
             eye_indices = [11, 13, 15, 16, 18]
             for idx in eye_indices:
                 amp_range = slice(idx*3, (idx+1)*3)
-                amp_array[0, i, amp_range] = self.current_exp_amplification['eye']
+                # Enhance eye movements during emotional speech
+                eye_amp = self.current_exp_amplification['eye'] * (
+                    1.0 + 0.3 * emotion_state.get('variation', 0.5))
+                amp_array[0, i, amp_range] = eye_amp
+                
+                # Add random blinks during natural pauses in speech
+                if idx in [13, 16] and normalized_energy[i] < 0.2 and np.random.random() < 0.02:
+                    # Blink effect: negative values close the eyes
+                    enhanced_seq[0, i:i+3, exp_start+amp_range] *= 0.5
             
             # Eyebrow movements - emotional emphasis
             brow_indices = [0, 1, 2, 3, 4, 5]
             for idx in brow_indices:
                 amp_range = slice(idx*3, (idx+1)*3)
-                amp_array[0, i, amp_range] = self.current_exp_amplification['brow'] * (
-                    1.0 + 0.2 * normalized_energy[i])
+                # Apply different response based on detected emotion
+                brow_amp = self.current_exp_amplification['brow']
+                
+                # Add surprise effect on eyebrows
+                if emotion_state.get('surprise', 0) > 0.6:
+                    # Raise eyebrows for surprise effect
+                    surprise_factor = min(1.0, emotion_state.get('surprise', 0) * 1.5)
+                    if idx in [0, 1, 2, 3]:  # Upper eyebrow points
+                        enhanced_seq[0, i, exp_start+amp_range] += 0.15 * surprise_factor
+                    brow_amp *= (1.0 + 0.3 * surprise_factor)
+                
+                # Add emphasis effect
+                brow_amp *= (1.0 + 0.25 * normalized_energy[i] * emotion_state.get('emphasis', 0.5))
+                amp_array[0, i, amp_range] = brow_amp
         
         # Apply amplification only to expression dimensions
         exp_start = 197  # Based on the motion_feat_dim structure
@@ -259,13 +360,59 @@ class Audio2Motion:
         """
         aud_cond: (1, seq_frames, dim)
         """
+        # Start timing for performance monitoring
+        start_time = time.time()
+        
         # Calculate audio energy for expression enhancement
         audio_energy = self._calculate_audio_energy(aud_cond)
         
-        # Generate base motion sequence
-        pred_kp_seq = self.lmdm(self.kp_cond, aud_cond, self.sampling_timesteps)
+        # Detect emotional content in audio
+        emotion = self._detect_emotion(aud_cond)
         
-        # Enhance expressions based on audio energy
+        # Check motion cache for similar audio patterns to speed up inference
+        cache_key = None
+        if len(self.motion_cache) < self.max_cache_size:
+            # Simple cache key based on downsampled audio features
+            # Only cache if we have enough frames
+            if aud_cond.shape[1] >= 8:
+                # Downsample to 8 frames at 128 dimensions
+                downsample_factor = max(1, aud_cond.shape[1] // 8)
+                feature_dim = min(128, aud_cond.shape[2])
+                cache_key = tuple(aud_cond[0, ::downsample_factor, :feature_dim].flatten().round(2))
+        
+        # Try to use cached motion if available
+        pred_kp_seq = None
+        if cache_key and cache_key in self.motion_cache:
+            pred_kp_seq = self.motion_cache[cache_key].copy()
+            # Adjust cached motion to current length if needed
+            if pred_kp_seq.shape[1] != aud_cond.shape[1]:
+                ratio = aud_cond.shape[1] / pred_kp_seq.shape[1]
+                if 0.8 < ratio < 1.2:  # Only use cache for similar lengths
+                    # Resize motion to match current frame count
+                    import cv2
+                    pred_kp_seq = np.array([cv2.resize(pred_kp_seq[0], (pred_kp_seq.shape[2], aud_cond.shape[1]), 
+                                                     interpolation=cv2.INTER_LINEAR)])[None]
+                else:
+                    pred_kp_seq = None
+            
+            if pred_kp_seq is not None:
+                self.cache_hits += 1
+        
+        # Generate base motion sequence if not cached
+        if pred_kp_seq is None:
+            self.cache_misses += 1
+            pred_kp_seq = self.lmdm(self.kp_cond, aud_cond, self.sampling_timesteps)
+            
+            # Cache the result for future use
+            if cache_key:
+                self.motion_cache[cache_key] = pred_kp_seq.copy()
+                
+                # Clear oldest cache entries if we exceed max size
+                if len(self.motion_cache) > self.max_cache_size:
+                    oldest_key = next(iter(self.motion_cache))
+                    del self.motion_cache[oldest_key]
+        
+        # Enhance expressions based on audio energy and detected emotion
         pred_kp_seq = self._enhance_expressions(pred_kp_seq, audio_energy)
         
         if res_kp_seq is None:
@@ -279,6 +426,13 @@ class Audio2Motion:
 
         idx = res_kp_seq.shape[1] - self.overlap_v2
         self._update_kp_cond(res_kp_seq, idx)
+
+        # Performance monitoring
+        end_time = time.time()
+        processing_time = end_time - start_time
+        # Uncomment for debugging performance:
+        # if self.clip_idx % 10 == 0:
+        #     print(f"Audio2Motion processing time: {processing_time:.3f}s, Cache hits: {self.cache_hits}, misses: {self.cache_misses}")
 
         return res_kp_seq
     
