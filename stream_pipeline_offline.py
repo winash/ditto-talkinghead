@@ -2,6 +2,7 @@ import threading
 import queue
 import numpy as np
 import traceback
+import os
 from tqdm import tqdm
 
 from core.atomic_components.avatar_registrar import AvatarRegistrar, smooth_x_s_info_lst
@@ -222,14 +223,26 @@ class StreamSDK:
         self.writer = VideoWriterByImageIO(self.tmp_output_path)
         self.writer_pbar = tqdm(desc="writer")
         
-        # Get background motion parameters
+        # Get background parameters
         self.bg_motion_enabled = kwargs.get("bg_motion_enabled", True)
         self.bg_motion_intensity = kwargs.get("bg_motion_intensity", 0.005)
+        self.bg_video_path = kwargs.get("bg_video_path", None)
         
-        # ======== Initialize PutBack with Background Motion ========
-        self.putback = PutBack(mask_template_path=None, bg_motion_intensity=self.bg_motion_intensity)
+        # ======== Initialize PutBack with Background Options ========
+        self.putback = PutBack(
+            mask_template_path=None, 
+            bg_motion_intensity=self.bg_motion_intensity,
+            bg_video_path=self.bg_video_path
+        )
+        
         # Enable/disable background motion based on parameter
-        self.putback.enable_bg_motion(self.bg_motion_enabled)
+        if self.bg_video_path and os.path.exists(self.bg_video_path):
+            print(f"Using video background: {self.bg_video_path}")
+            # Video background is enabled automatically when loaded
+        else:
+            # Fall back to motion background if enabled
+            self.putback.enable_bg_motion(self.bg_motion_enabled)
+            print(f"Using {'animated' if self.bg_motion_enabled else 'static'} background")
 
         # ======== Audio Feat Buffer ========
         if self.online_mode:

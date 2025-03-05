@@ -101,11 +101,13 @@ if __name__ == "__main__":
     parser.add_argument("--smo_k_d", type=int, default=2,
                        help="Smoothing kernel size (1-3, lower is more dynamic)")
     
-    # Background motion parameters
+    # Background parameters
     parser.add_argument("--bg_motion_enabled", action="store_true", default=True,
                        help="Enable subtle background motion for more natural look")
     parser.add_argument("--bg_motion_intensity", type=float, default=0.005,
                        help="Background motion intensity (0.001-0.02, higher=more movement)")
+    parser.add_argument("--bg_video_path", type=str, default=None,
+                       help="Path to video to use as background (overrides motion background)")
                        
     # Digital twin parameters
     parser.add_argument("--digital_twin_mode", action="store_true", default=False,
@@ -151,6 +153,7 @@ if __name__ == "__main__":
         "batch_size": args.batch_size,
         "bg_motion_enabled": args.bg_motion_enabled,
         "bg_motion_intensity": args.bg_motion_intensity,
+        "bg_video_path": args.bg_video_path,
         "digital_twin_mode": args.digital_twin_mode,
         "digital_twin_model_dir": args.digital_twin_model_dir
     }
@@ -164,8 +167,11 @@ if __name__ == "__main__":
     print(f"  - Emotional guidance: {args.noise_guidance:.2f}")
     
     print("\nBACKGROUND SETTINGS:")
-    print(f"  - Background motion: {'Enabled' if args.bg_motion_enabled else 'Disabled'}")
-    print(f"  - Motion intensity: {args.bg_motion_intensity:.3f}")
+    if args.bg_video_path:
+        print(f"  - Video background: {args.bg_video_path}")
+    else:
+        print(f"  - Background motion: {'Enabled' if args.bg_motion_enabled else 'Disabled'}")
+        print(f"  - Motion intensity: {args.bg_motion_intensity:.3f}")
     
     print("\nDIGITAL TWIN SETTINGS:")
     print(f"  - Digital twin mode: {'Enabled' if args.digital_twin_mode else 'Disabled'}")

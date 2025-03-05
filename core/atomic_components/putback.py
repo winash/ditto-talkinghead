@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import os
 from ..utils.blend import blend_images_cy
 from ..utils.get_mask import get_mask
 
@@ -35,6 +36,7 @@ class PutBack:
         self,
         mask_template_path=None,
         bg_motion_intensity=0.005,  # Controls background motion intensity
+        bg_video_path=None,  # Path to background video
     ):
         if mask_template_path is None:
             mask = get_mask(512, 512, 0.9, 0.9)
@@ -53,6 +55,56 @@ class PutBack:
         self.bg_flow_x = None
         self.bg_flow_y = None
         
+        # Video background parameters
+        self.bg_video_path = bg_video_path
+        self.bg_video_cap = None
+        self.bg_video_frames = []
+        self.bg_video_frame_idx = 0
+        self.use_video_background = False
+        
+        # Load background video if provided
+        if bg_video_path is not None and os.path.exists(bg_video_path):
+            self.load_background_video(bg_video_path)
+        
+    def load_background_video(self, video_path):
+        """Load a video to use as background"""
+        print(f"Loading background video: {video_path}")
+        self.bg_video_path = video_path
+        
+        # Open video file
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            print(f"Error: Could not open background video {video_path}")
+            return False
+        
+        # Get video properties
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        # Load frames (with memory consideration)
+        max_frames = min(frame_count, 300)  # Limit to 300 frames to avoid excessive memory usage
+        self.bg_video_frames = []
+        
+        print(f"Loading {max_frames} frames from background video...")
+        for i in range(max_frames):
+            ret, frame = cap.read()
+            if not ret:
+                break
+            # Convert BGR to RGB
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            self.bg_video_frames.append(frame_rgb)
+        
+        cap.release()
+        
+        if len(self.bg_video_frames) > 0:
+            print(f"Loaded {len(self.bg_video_frames)} background frames")
+            self.use_video_background = True
+            self.bg_video_frame_idx = 0
+            return True
+        else:
+            print("Error: No frames loaded from background video")
+            self.use_video_background = False
+            return False
+        
     def enable_bg_motion(self, enabled=True):
         """Enable or disable background motion"""
         self.bg_motion_enabled = enabled
@@ -60,6 +112,10 @@ class PutBack:
     def set_bg_motion_intensity(self, intensity):
         """Set background motion intensity (0.0 to 0.05)"""
         self.bg_motion_intensity = max(0.0, min(0.05, intensity))
+        
+    def enable_video_background(self, enabled=True):
+        """Enable or disable video background"""
+        self.use_video_background = enabled and len(self.bg_video_frames) > 0
 
     def __call__(self, frame_rgb, render_image, M_c2o):
         h, w = frame_rgb.shape[:2]
@@ -70,17 +126,29 @@ class PutBack:
             render_image, M_c2o[:2, :], dsize=(w, h), flags=cv2.INTER_LINEAR
         )
         
-        # Apply animated background if enabled
-        if self.bg_motion_enabled:
-            # Animate the background
+        # Initialize result buffer
+        self.result_buffer = np.empty((h, w, 3), dtype=np.uint8)
+        
+        # Determine background to use
+        if self.use_video_background and len(self.bg_video_frames) > 0:
+            # Use video frame as background
+            bg_frame = self.bg_video_frames[self.bg_video_frame_idx]
+            
+            # Resize background frame to match target size
+            bg_frame = cv2.resize(bg_frame, (w, h))
+            
+            # Advance to next frame (loop if needed)
+            self.bg_video_frame_idx = (self.bg_video_frame_idx + 1) % len(self.bg_video_frames)
+            
+            # Blend foreground with video background
+            blend_images_cy(mask_warped, frame_warped, bg_frame, self.result_buffer)
+            
+        elif self.bg_motion_enabled:
+            # Use animated background
             animated_frame = self._animate_background(frame_rgb, mask_warped)
-            self.result_buffer = np.empty((h, w, 3), dtype=np.uint8)
-            # Use Cython implementation for blending
             blend_images_cy(mask_warped, frame_warped, animated_frame, self.result_buffer)
         else:
-            # Original behavior without animated background
-            self.result_buffer = np.empty((h, w, 3), dtype=np.uint8)
-            # Use Cython implementation for blending
+            # Use original background without animation
             blend_images_cy(mask_warped, frame_warped, frame_rgb, self.result_buffer)
 
         return self.result_buffer
