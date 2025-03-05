@@ -56,15 +56,47 @@ def fade(x_d_info, dst, alpha, keys=None):
     return x_d_info
 
 
-def ctrl_vad(x_d_info, dst, alpha):
+def ctrl_vad(x_d_info, dst, alpha, emphasis_factor=1.2):
+    """
+    Enhanced voice activity detection control with better audio-expression sync
+    
+    Args:
+        x_d_info: Motion info dictionary with expressions
+        dst: Target/source info
+        alpha: VAD alpha value (voice activity level)
+        emphasis_factor: Factor to enhance lip movement expressiveness
+    """
     exp = x_d_info["exp"]
     exp_dst = dst["exp"]
 
+    # Lip movement control points
     _lip = [6, 12, 14, 17, 19, 20]
+    
+    # Create alpha mask for expression control
     _a1 = np.zeros((21, 3), dtype=np.float32)
-    _a1[_lip] = alpha
+    
+    # Apply different emphasis to different lip components for more natural movement
+    for i, lip_idx in enumerate(_lip):
+        # Primary lips (6, 17) get strongest movement
+        if lip_idx in [6, 17]:
+            _a1[lip_idx] = alpha * emphasis_factor
+        # Secondary lips get normal movement
+        elif lip_idx in [12, 14]:
+            _a1[lip_idx] = alpha
+        # Tertiary lips get subtle movement
+        else:
+            _a1[lip_idx] = alpha * 0.9
+    
+    # Apply a slight correlation between lip movement and subtle cheek movement
+    # Control points 7, 8, 9 correspond to cheek areas
+    cheek_indices = [7, 8, 9]
+    for idx in cheek_indices:
+        _a1[idx] = alpha * 0.2  # Subtle cheek movement follows speech
+    
     _a1 = _a1.reshape(1, -1)
-    x_d_info["exp"] = exp * alpha + exp_dst * (1 - alpha)
+    
+    # Apply the enhanced lip movement
+    x_d_info["exp"] = exp * _a1 + exp_dst * (1 - _a1)
 
     return x_d_info
     
@@ -187,9 +219,19 @@ def _eye_delta(exp, dx=0, dy=0):
     exp[0, 46] += dy * -0.001
     return exp
 
-def _fix_gaze(pose_s, x_d_info):
-    x_ratio = 0.26
-    y_ratio = 0.28
+def _fix_gaze(pose_s, x_d_info, attention_point=None, emotional_emphasis=1.0):
+    """
+    Enhanced gaze control for more natural eye movements
+    
+    Args:
+        pose_s: Source pose (yaw, pitch)
+        x_d_info: Motion info dictionary
+        attention_point: Optional focus point to direct gaze (None = follow head)
+        emotional_emphasis: Factor to enhance emotional expressiveness (1.0 = normal)
+    """
+    # Increased ratios for more responsive eye movements
+    x_ratio = 0.30  # Was 0.26
+    y_ratio = 0.34  # Was 0.28
     
     yaw_s, pitch_s = pose_s
     yaw_d = bin66_to_degree(x_d_info['yaw']).item()
@@ -198,9 +240,23 @@ def _fix_gaze(pose_s, x_d_info):
     delta_yaw = yaw_d - yaw_s
     delta_pitch = pitch_d - pitch_s
 
-    dx = delta_yaw * x_ratio
+    # Add slight variation for more natural eye movement
+    # Eyes occasionally look slightly away from exact head direction
+    natural_variation = np.sin(yaw_d * 0.1) * 0.05
+    
+    dx = delta_yaw * x_ratio + natural_variation
     dy = delta_pitch * y_ratio
     
+    # Apply emotional emphasis to eye movements
+    # Higher emotional_emphasis means more expressive eyes
+    if emotional_emphasis > 1.0:
+        # Enhance eye expressiveness based on head movement magnitude
+        movement_magnitude = abs(delta_yaw) + abs(delta_pitch)
+        expressiveness_boost = min(0.3, movement_magnitude * 0.03) * (emotional_emphasis - 1.0)
+        dx *= (1.0 + expressiveness_boost)
+        dy *= (1.0 + expressiveness_boost)
+    
+    # Apply the enhanced eye movement
     x_d_info['exp'] = _eye_delta(x_d_info['exp'], dx, dy)
     return x_d_info
 
@@ -414,6 +470,9 @@ class MotionStitch:
         # return x_s, x_d
 
         kwargs = self._merge_kwargs(self.overall_ctrl_info, kwargs)
+        
+        # Get emotional emphasis value, defaulting to 1.2 for enhanced expressiveness
+        emotional_emphasis = kwargs.get("emotional_emphasis", 1.2)
 
         if self.scale_ratio is None:
             self.scale_b = x_s_info['scale'].item()
@@ -430,11 +489,17 @@ class MotionStitch:
             self.d0,
         )
 
+        # Enhanced eye blinking and movement
         delta_eye = 0
         if self.drive_eye and self.delta_eye_arr is not None:
-            delta_eye = self.delta_eye_arr[
-                self.delta_eye_idx_list[self.idx % len(self.delta_eye_idx_list)]
-            ][None]
+            blink_idx = self.delta_eye_idx_list[self.idx % len(self.delta_eye_idx_list)]
+            delta_eye = self.delta_eye_arr[blink_idx][None]
+            
+            # Apply emotional emphasis to eye expressions
+            if emotional_emphasis > 1.0 and blink_idx > 0:
+                # Only amplify non-neutral eye states (blinking or expressions)
+                delta_eye = delta_eye * emotional_emphasis
+                
         x_d_info = _fix_exp_for_x_d_info_v2(
             x_d_info,
             x_s_info,
@@ -444,15 +509,35 @@ class MotionStitch:
             self.fix_exp_a3,
         )
 
+        # Enhanced lip synchronization with audio
         if kwargs.get("vad_alpha", 1) < 1:
-            x_d_info = ctrl_vad(x_d_info, x_s_info, kwargs.get("vad_alpha", 1))
+            # More dynamic control of lip movement based on audio
+            vad_alpha = kwargs.get("vad_alpha", 1)
+            # Apply nonlinear mapping for more natural lip response
+            vad_alpha = np.power(vad_alpha, 0.85)  # Less aggressive attenuation
+            x_d_info = ctrl_vad(x_d_info, x_s_info, vad_alpha)
+
+        # Apply enhanced motion control with emotional emphasis
+        if "delta_exp" not in kwargs and emotional_emphasis > 1.0:
+            # Create subtle expression offsets for more emotional faces
+            # Focus on eyebrow and upper face areas (first 5 control points)
+            exp_delta = np.zeros((1, 63), dtype=x_d_info["exp"].dtype)
+            
+            # Subtle eyebrow/forehead expressions for enhanced emotion
+            emotion_indices = [0, 1, 2, 3, 4]
+            for idx in emotion_indices:
+                offset = slice(idx*3, (idx+1)*3)
+                # Create subtle random movements weighted by emotional_emphasis
+                exp_delta[0, offset] = (np.random.randn(3) * 0.0015) * (emotional_emphasis - 1.0)
+            
+            kwargs["delta_exp"] = exp_delta
 
         x_d_info = ctrl_motion(x_d_info, **kwargs)
 
         if self.fade_type == "d0" and self.fade_dst is None:
             self.fade_dst = copy.deepcopy(x_d_info)
 
-        # fade
+        # Enhanced fade transitions
         if "fade_alpha" in kwargs and self.fade_type in ["d0", "s"]:
             fade_alpha = kwargs["fade_alpha"]
             fade_keys = kwargs.get("fade_out_keys", self.fade_out_keys)
@@ -465,14 +550,20 @@ class MotionStitch:
                     fade_dst = copy.deepcopy(x_s_info)
                     if self.is_image_flag:
                         self.fade_dst = fade_dst
+                        
+            # Apply smoother fade with cubic easing curve
+            fade_alpha = fade_alpha * fade_alpha * (3 - 2 * fade_alpha)  # Cubic easing
             x_d_info = fade(x_d_info, fade_dst, fade_alpha, fade_keys)
 
+        # Enhanced gaze control with emotional emphasis
         if self.drive_eye:
             if self.pose_s is None:
                 yaw_s = bin66_to_degree(x_s_info['yaw']).item()
                 pitch_s = bin66_to_degree(x_s_info['pitch']).item()
                 self.pose_s = [yaw_s, pitch_s]
-            x_d_info = _fix_gaze(self.pose_s, x_d_info)
+            # Pass emotional emphasis to gaze control for more expressive eyes
+            x_d_info = _fix_gaze(self.pose_s, x_d_info, 
+                                emotional_emphasis=emotional_emphasis)
 
         if self.x_s is not None:
             x_s = self.x_s

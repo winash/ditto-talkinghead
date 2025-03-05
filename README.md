@@ -155,6 +155,27 @@ python inference.py \
     --output_path "./tmp/result.mp4" 
 ```
 
+### Enhanced Emotional Expressions
+
+For more realistic and emotional expressions that better sync with audio:
+
+```shell
+python inference.py \
+    --data_root "./checkpoints/ditto_trt_Ampere_Plus" \
+    --cfg_pkl "./checkpoints/ditto_cfg/v0.4_hubert_cfg_trt.pkl" \
+    --audio_path "./example/audio.wav" \
+    --source_path "./example/image.png" \
+    --output_path "./tmp/result.mp4" \
+    --emotional_intensity 1.3 \
+    --sampling_timesteps 60 \
+    --smo_k_d 2
+```
+
+Parameters for emotional enhancements:
+- `--emotional_intensity`: Controls the overall emotional expressiveness (1.0=normal, 1.3=enhanced, 1.5=strong)
+- `--sampling_timesteps`: Higher values (50-80) produce more detailed expressions (default=50)
+- `--smo_k_d`: Lower values (1-2) create more dynamic expressions (default=3)
+
 ❗Note:
 
 We have provided the tensorRT model with `hardware-compatibility-level=Ampere_Plus` (`checkpoints/ditto_trt_Ampere_Plus/`). If your GPU does not support it, please execute the `cvt_onnx_to_trt.py` script to convert from the general onnx model (`checkpoints/ditto_onnx/`) to the tensorRT model.

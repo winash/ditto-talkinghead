@@ -163,6 +163,13 @@ class StreamSDK:
 
         # ======== Setup Audio2Motion (LMDM) ========
         x_s_info_0 = self.condition_handler.x_s_info_0
+        # Add enhanced parameters for more realistic and emotional expressions
+        self.emotion_intensity = kwargs.get("emotion_intensity", 1.3)
+        self.noise_guidance = kwargs.get("noise_guidance", 0.25)
+        # Reduce smoothing for more dynamic expressions
+        if "smo_k_d" not in kwargs:
+            self.smo_k_d = 2  # Default to a lower value than the original 3
+        
         self.audio2motion.setup(
             x_s_info_0, 
             overlap_v2=self.overlap_v2,
@@ -172,11 +179,18 @@ class StreamSDK:
             online_mode=self.online_mode,
             v_min_max_for_clip=self.v_min_max_for_clip,
             smo_k_d=self.smo_k_d,
+            emotion_intensity=self.emotion_intensity,  # New parameter for emotional expressions
+            noise_guidance=self.noise_guidance,        # New parameter for more expressive noise
         )
 
         # ======== Setup Motion Stitch ========
         is_image_flag = source_info["is_image_flag"]
         x_s_info = source_info['x_s_info_lst'][0]
+        # Update motion stitch setup with emotional emphasis
+        self.overall_ctrl_info.update({
+            "emotional_emphasis": self.emotion_intensity  # Add emotional emphasis to default control info
+        })
+        
         self.motion_stitch.setup(
             N_d=self.N_d,
             use_d_keys=self.use_d_keys,

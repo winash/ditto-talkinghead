@@ -72,6 +72,17 @@ if __name__ == "__main__":
     parser.add_argument("--audio_path", type=str, help="path to input wav")
     parser.add_argument("--source_path", type=str, help="path to input image")
     parser.add_argument("--output_path", type=str, help="path to output mp4")
+    
+    # Enhanced emotional expression parameters
+    parser.add_argument("--emotional_intensity", type=float, default=1.0, 
+                       help="Controls emotional expressiveness (1.0=normal, 1.3=enhanced, 1.5=strong)")
+    parser.add_argument("--sampling_timesteps", type=int, default=50,
+                       help="Number of sampling steps (50-80, higher is more detailed)")
+    parser.add_argument("--noise_guidance", type=float, default=0.25,
+                       help="Noise guidance for more expressive motion (0.1-0.3)")
+    parser.add_argument("--smo_k_d", type=int, default=3,
+                       help="Smoothing kernel size (1-3, lower is more dynamic)")
+    
     args = parser.parse_args()
 
     # init sdk
@@ -84,6 +95,22 @@ if __name__ == "__main__":
     source_path = args.source_path   # video|image
     output_path = args.output_path   # .mp4
 
+    # Create enhanced emotional expression setup
+    setup_kwargs = {
+        "emotion_intensity": args.emotional_intensity,
+        "sampling_timesteps": args.sampling_timesteps,
+        "noise_guidance": args.noise_guidance,
+        "smo_k_d": args.smo_k_d
+    }
+    more_kwargs = {"setup_kwargs": setup_kwargs}
+    
+    # Print info about enhanced settings if they're not default
+    if args.emotional_intensity > 1.0 or args.sampling_timesteps != 50 or args.smo_k_d != 3:
+        print("Using enhanced emotional expressions:")
+        print(f"  - Emotional intensity: {args.emotional_intensity}")
+        print(f"  - Sampling detail: {args.sampling_timesteps}")
+        print(f"  - Expression dynamics: {4-args.smo_k_d}/3")
+    
     # run
     # seed_everything(1024)
-    run(SDK, audio_path, source_path, output_path)
+    run(SDK, audio_path, source_path, output_path, more_kwargs)
