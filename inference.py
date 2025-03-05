@@ -31,7 +31,23 @@ def run(SDK: StreamSDK, audio_path: str, source_path: str, output_path: str, mor
     setup_kwargs = more_kwargs.get("setup_kwargs", {})
     run_kwargs = more_kwargs.get("run_kwargs", {})
 
+    # Extract digital twin and background motion parameters from setup_kwargs
+    # to make them accessible to the StreamSDK instance
+    SDK.digital_twin_mode = setup_kwargs.get("digital_twin_mode", False)
+    SDK.digital_twin_model_dir = setup_kwargs.get("digital_twin_model_dir", None)
+    SDK.bg_motion_enabled = setup_kwargs.get("bg_motion_enabled", True)
+    SDK.bg_motion_intensity = setup_kwargs.get("bg_motion_intensity", 0.005)
+    
+    # Setup the SDK with all parameters
     SDK.setup(source_path, output_path, **setup_kwargs)
+    
+    # Load digital twin model if specified and enabled
+    if SDK.digital_twin_mode and SDK.digital_twin_model_dir:
+        # Check if method exists before trying to call it
+        if hasattr(SDK, 'load_digital_twin'):
+            SDK.load_digital_twin(SDK.digital_twin_model_dir)
+        else:
+            print("Warning: Digital twin mode enabled but SDK.load_digital_twin method not found")
 
     audio, sr = librosa.core.load(audio_path, sr=16000)
     num_f = math.ceil(len(audio) / 16000 * 25)
@@ -153,8 +169,12 @@ if __name__ == "__main__":
     
     print("\nDIGITAL TWIN SETTINGS:")
     print(f"  - Digital twin mode: {'Enabled' if args.digital_twin_mode else 'Disabled'}")
-    if args.digital_twin_mode and args.digital_twin_model_dir:
-        print(f"  - Model directory: {args.digital_twin_model_dir}")
+    if args.digital_twin_mode:
+        if args.digital_twin_model_dir:
+            print(f"  - Model directory: {args.digital_twin_model_dir}")
+        else:
+            print(f"  - WARNING: Digital twin mode enabled but no model directory provided!")
+            print(f"  - Use --digital_twin_model_dir to specify your personalized model")
     
     print("\nPERFORMANCE SETTINGS:")
     print(f"  - Speed optimization: {'Enabled' if args.optimize_speed else 'Disabled'}")

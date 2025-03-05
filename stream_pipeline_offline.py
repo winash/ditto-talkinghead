@@ -170,6 +170,10 @@ class StreamSDK:
         if "smo_k_d" not in kwargs:
             self.smo_k_d = 1  # Minimal smoothing for more responsive expressions
         
+        # Get digital twin parameters from kwargs
+        self.digital_twin_mode = kwargs.get("digital_twin_mode", False)
+        self.digital_twin_model_dir = kwargs.get("digital_twin_model_dir", None)
+        
         self.audio2motion.setup(
             x_s_info_0, 
             overlap_v2=self.overlap_v2,
@@ -218,6 +222,10 @@ class StreamSDK:
         self.writer = VideoWriterByImageIO(self.tmp_output_path)
         self.writer_pbar = tqdm(desc="writer")
         
+        # Get background motion parameters
+        self.bg_motion_enabled = kwargs.get("bg_motion_enabled", True)
+        self.bg_motion_intensity = kwargs.get("bg_motion_intensity", 0.005)
+        
         # ======== Initialize PutBack with Background Motion ========
         self.putback = PutBack(mask_template_path=None, bg_motion_intensity=self.bg_motion_intensity)
         # Enable/disable background motion based on parameter
@@ -239,13 +247,7 @@ class StreamSDK:
         self.worker_exception = None
         self.stop_event = threading.Event()
 
-        # Setup background motion parameters
-        self.bg_motion_enabled = kwargs.get("bg_motion_enabled", True)
-        self.bg_motion_intensity = kwargs.get("bg_motion_intensity", 0.005)
-        
-        # Setup digital twin parameters
-        self.digital_twin_mode = kwargs.get("digital_twin_mode", False)
-        self.digital_twin_model_dir = kwargs.get("digital_twin_model_dir", None)
+        # These parameters were already set above, so we don't need to set them again
         
         # Create queues for worker threads
         self.audio2motion_queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
