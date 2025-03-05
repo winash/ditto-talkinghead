@@ -217,38 +217,92 @@ class Audio2Motion:
         # Apply non-linear emphasis to make louder sounds more pronounced
         energy = np.power(energy, 1.2)  # Emphasize louder sounds for better sync
         
+        # Apply voice activity detection to filter out background noise/music
+        # Use a dynamic threshold that adapts to the audio levels
+        energy_mean = np.mean(energy)
+        energy_std = np.std(energy)
+        voice_threshold = max(0.15, energy_mean - 0.5 * energy_std)  # Adaptive threshold
+        
+        # Apply the threshold - only consider energy above threshold as speech
+        voice_mask = energy > voice_threshold
+        
+        # Ensure pauses are properly detected
+        # Create smoother transitions for pauses with gradual fade-out
+        smoothed_voice_mask = np.zeros_like(energy)
+        decay_factor = 0.7  # How quickly to fade out lip movement in pauses
+        
+        # Forward pass to ensure smooth transitions into pauses
+        current_value = 0
+        for i in range(len(energy)):
+            if voice_mask[i]:
+                current_value = energy[i]
+            else:
+                current_value *= decay_factor
+            smoothed_voice_mask[i] = current_value
+        
         # Normalize energy within a reasonable range
-        if energy.max() > 0:
-            energy = energy / energy.max()
-            
+        if smoothed_voice_mask.max() > 0:
+            smoothed_voice_mask = smoothed_voice_mask / smoothed_voice_mask.max()
+        
         # Apply temporal smoothing with a lookahead bias to reduce lip sync delay
         # This helps the lips move slightly earlier than the audio for perceived better sync
         kernel_size = 3
-        smoothed_energy = np.zeros_like(energy)
-        for i in range(len(energy)):
+        smoothed_energy = np.zeros_like(smoothed_voice_mask)
+        for i in range(len(smoothed_voice_mask)):
             # Lookahead weighted average (gives more weight to upcoming sound)
             window_start = max(0, i - 1)
-            window_end = min(len(energy), i + 2)
+            window_end = min(len(smoothed_voice_mask), i + 2)
             weights = np.array([0.2, 0.5, 0.3])[:window_end-window_start]
-            smoothed_energy[i] = np.average(energy[window_start:window_end], weights=weights)
+            smoothed_energy[i] = np.average(smoothed_voice_mask[window_start:window_end], weights=weights)
         
         return smoothed_energy
     
     def _detect_emotion(self, aud_cond):
-        """Detect emotion from audio features"""
+        """Detect emotion from audio features with improved tone matching"""
         # Extract features that correspond to emotional content
         audio_features = aud_cond[0]
         
         # Calculate statistics that correlate with emotional states
+        # Focus on lower frequency features which contain more emotional tone information
         energy = np.mean(np.square(audio_features[:, :100]), axis=1)
+        
+        # Extract more nuanced feature statistics for better emotion detection
+        # Standard deviation captures tonal variation
         variation = np.std(audio_features, axis=1)
         
-        # Detect changes in the audio (indicates excitement, emphasis)
+        # Frequency of pitch changes (approximated by feature changes)
         if audio_features.shape[0] > 1:
             changes = np.mean(np.abs(audio_features[1:] - audio_features[:-1]), axis=1)
             changes = np.pad(changes, (1, 0), mode='edge')
+            
+            # Detect speed of speech (approximated by frequency of significant changes)
+            # This helps identify excited or urgent speech
+            change_threshold = np.percentile(changes, 70)  # Adaptive threshold
+            rapid_changes = changes > change_threshold
+            speech_speed = np.convolve(rapid_changes.astype(float), np.ones(5)/5, mode='same')
         else:
             changes = np.zeros_like(energy)
+            speech_speed = np.zeros_like(energy)
+        
+        # Detect audio pitch trend (rising/falling) over time
+        if audio_features.shape[0] > 10:
+            # Use a subset of features that correlate with pitch
+            pitch_features = audio_features[:, 50:150]
+            # Calculate trend over windows
+            window_size = min(10, audio_features.shape[0]-1)
+            pitch_trend = np.zeros(audio_features.shape[0])
+            
+            for i in range(audio_features.shape[0] - window_size):
+                start_avg = np.mean(pitch_features[i:i+3], axis=(0, 1))
+                end_avg = np.mean(pitch_features[i+window_size-3:i+window_size], axis=(0, 1))
+                pitch_trend[i+window_size//2] = np.mean(end_avg - start_avg)
+            
+            # Normalize and smooth pitch trend
+            if np.abs(pitch_trend).max() > 0:
+                pitch_trend = pitch_trend / np.abs(pitch_trend).max()
+            pitch_trend = np.convolve(pitch_trend, np.ones(3)/3, mode='same')
+        else:
+            pitch_trend = np.zeros_like(energy)
         
         # Normalize values
         if energy.max() > 0:
@@ -257,16 +311,37 @@ class Audio2Motion:
             variation = variation / variation.max()
         if changes.max() > 0:
             changes = changes / changes.max()
+        if speech_speed.max() > 0:
+            speech_speed = speech_speed / speech_speed.max()
         
-        # Create emotion scores dictionary
+        # Create enhanced emotion scores dictionary with more emotional dimensions
         emotion = {
-            'emphasis': np.minimum(1.0, energy * 1.5),  # General emphasis/intensity
-            'surprise': np.minimum(1.0, changes * 2.5),  # Sudden changes indicate surprise
-            'variation': np.minimum(1.0, variation * 2.0)  # Variability indicates emotional speech
+            'emphasis': np.minimum(1.0, energy * 1.5),        # General emphasis/intensity
+            'surprise': np.minimum(1.0, changes * 2.5),       # Sudden changes indicate surprise
+            'variation': np.minimum(1.0, variation * 2.0),    # Variability indicates emotional speech
+            'excitement': np.minimum(1.0, speech_speed * 1.8),  # Rapid speech indicates excitement
+            'questioning': np.minimum(1.0, np.maximum(0, pitch_trend) * 2.2),  # Rising tone indicates questions
+            'firmness': np.minimum(1.0, np.maximum(0, -pitch_trend) * 1.8)     # Falling tone indicates statements/firmness
         }
         
-        # Add emotion state to history
+        # Apply smoothing to emotions for more natural transitions
+        smooth_window = 5  # Frames
+        for k in emotion:
+            if len(emotion[k]) > smooth_window:
+                emotion[k] = np.convolve(emotion[k], np.ones(smooth_window)/smooth_window, mode='same')
+        
+        # Add emotion state to history with temporal smoothing
         avg_emotion = {k: float(np.mean(v)) for k, v in emotion.items()}
+        
+        # Smooth transitions between emotional states
+        if self.emotion_history:
+            prev_emotion = self.emotion_history[-1]
+            # Apply exponential smoothing to emotion transitions
+            smooth_factor = 0.7  # Higher = more responsive to changes
+            for k in avg_emotion:
+                if k in prev_emotion:
+                    avg_emotion[k] = prev_emotion[k] * (1 - smooth_factor) + avg_emotion[k] * smooth_factor
+        
         self.emotion_history.append(avg_emotion)
         if len(self.emotion_history) > self.emotion_window_size:
             self.emotion_history.pop(0)
@@ -280,6 +355,9 @@ class Audio2Motion:
         # - Lip-related (mouth) expressions: indices [6, 12, 14, 17, 19, 20]
         # - Eye-related expressions: indices [11, 13, 15, 16, 18]
         # - Brow-related expressions (approximate): indices [0, 1, 2, 3, 4, 5]
+        
+        # Define the expression start index in the feature vector
+        exp_start = 197  # Based on the motion_feat_dim structure
         
         # Normalize audio energy
         self.audio_energy_history.append(np.mean(audio_energy))
@@ -303,54 +381,122 @@ class Audio2Motion:
         # Initialize amplification array for expression dimensions (21 control points × 3 dimensions = 63)
         amp_array = np.ones((1, n_frames, 63), dtype=np.float32)
         
+        # Detect long pauses for natural behaviors during silence
+        pause_frames = normalized_energy < 0.15
+        pause_starts = np.where(np.logical_and(~pause_frames[:-1], pause_frames[1:]))[0] + 1
+        
+        # Add natural movements during longer pauses
+        for pause_start in pause_starts:
+            # Find end of current pause
+            pause_end = pause_start
+            while pause_end < len(pause_frames) and pause_frames[pause_end]:
+                pause_end += 1
+                
+            pause_length = pause_end - pause_start
+            
+            # Only add behaviors for longer pauses (more than ~0.3 seconds)
+            if pause_length > 7:
+                # Determine if we should add a head movement, blink, or other natural behavior
+                behavior_type = np.random.choice(['blink', 'head_shift', 'none'], 
+                                               p=[0.4, 0.3, 0.3])
+                
+                if behavior_type == 'blink':
+                    # Add a natural blink during the pause
+                    blink_frame = pause_start + np.random.randint(2, pause_length-2)
+                    blink_duration = 3  # About 0.12 seconds
+                    
+                    # Eye indices for blinking
+                    for idx in [13, 16]:  # Eye closure indices
+                        amp_range = slice(idx*3, (idx+1)*3)
+                        # Gradual closing and opening
+                        for j in range(blink_duration):
+                            t = j / (blink_duration-1)  # 0 to 1
+                            # Sinusoidal pattern for natural blink
+                            blink_factor = 0.1 if j == 0 or j == blink_duration-1 else 0.05
+                            enhanced_seq[0, blink_frame+j, exp_start+amp_range] *= blink_factor
+                
+                elif behavior_type == 'head_shift':
+                    # Small natural head movement during pause
+                    # Head rotations are in the yaw/pitch/roll parameters
+                    shift_start = pause_start + np.random.randint(1, max(2, pause_length//3))
+                    shift_duration = min(5, pause_length-2)  # About 0.2 seconds of movement
+                    
+                    # Small random head rotation
+                    yaw_shift = np.random.normal(0, 0.02)  # Small random yaw
+                    pitch_shift = np.random.normal(0, 0.015)  # Even smaller pitch
+                    
+                    # Apply subtle head movement over several frames
+                    for j in range(shift_duration):
+                        t = j / (shift_duration-1)  # 0 to 1
+                        weight = np.sin(t * np.pi) if j < shift_duration//2 else np.sin((1-t) * np.pi)
+                        
+                        # Modify yaw and pitch slightly (indices 1-65 contain head pose)
+                        # These are approximate - adjust based on actual model parameters
+                        enhanced_seq[0, shift_start+j, 1:66] += weight * np.array([yaw_shift, pitch_shift, 0]).repeat(22)
+        
         # Map audio energy to expression amplification with emotion influence
         for i in range(n_frames):
             # Get energy factor for this frame (with nonlinear emphasis on louder segments)
-            energy_factor = 1.0 + 0.4 * (normalized_energy[i] ** 1.4)  # More pronounced response
+            energy_factor = 1.0 + 0.5 * (normalized_energy[i] ** 1.5)  # More pronounced response for speech
+            
+            # Only amplify lips when there's actual speech (energy above threshold)
+            # This ensures lips don't move during silence or background noise
+            is_speech = normalized_energy[i] > 0.2
             
             # Lip movements amplified by audio energy with improved sync
             lip_indices = [6, 12, 14, 17, 19, 20]
             for idx in lip_indices:
                 amp_range = slice(idx*3, (idx+1)*3)
-                # Apply additional amplification for emphasized speech
-                lip_amp = self.current_exp_amplification['lip'] * energy_factor
+                # Apply additional amplification for emphasized speech only when speech is detected
+                lip_amp = self.current_exp_amplification['lip'] * (energy_factor if is_speech else 0.2)
                 amp_array[0, i, amp_range] = lip_amp
             
             # Eye expressions - add more variation and emotional response
             eye_indices = [11, 13, 15, 16, 18]
             for idx in eye_indices:
                 amp_range = slice(idx*3, (idx+1)*3)
-                # Enhance eye movements during emotional speech
+                # Enhanced eye expressions correlate with emotion, not just audio level
                 eye_amp = self.current_exp_amplification['eye'] * (
-                    1.0 + 0.3 * emotion_state.get('variation', 0.5))
+                    1.0 + 0.35 * emotion_state.get('variation', 0.5))
                 amp_array[0, i, amp_range] = eye_amp
                 
-                # Add random blinks during natural pauses in speech
-                if idx in [13, 16] and normalized_energy[i] < 0.2 and np.random.random() < 0.02:
-                    # Blink effect: negative values close the eyes
-                    enhanced_seq[0, i:i+3, exp_start+amp_range] *= 0.5
+                # Add natural blinks during pauses with varied timing
+                if idx in [13, 16] and normalized_energy[i] < 0.2:
+                    # Higher chance of blinking during extended silence
+                    pause_blink_chance = 0.01 + 0.03 * (1.0 - normalized_energy[i])
+                    if np.random.random() < pause_blink_chance:
+                        # Blink effect: reduced values for eye openness
+                        for j in range(3):  # 3-frame blink
+                            if i+j < n_frames:
+                                blink_factor = 0.1 if j == 1 else 0.3  # Stronger closure in middle frame
+                                enhanced_seq[0, i+j, exp_start+amp_range] *= blink_factor
             
-            # Eyebrow movements - emotional emphasis
+            # Eyebrow movements - emotional emphasis and match vocal tone
             brow_indices = [0, 1, 2, 3, 4, 5]
             for idx in brow_indices:
                 amp_range = slice(idx*3, (idx+1)*3)
-                # Apply different response based on detected emotion
+                # Base amplification
                 brow_amp = self.current_exp_amplification['brow']
                 
-                # Add surprise effect on eyebrows
+                # Enhance surprise effect on eyebrows
                 if emotion_state.get('surprise', 0) > 0.6:
-                    # Raise eyebrows for surprise effect
-                    surprise_factor = min(1.0, emotion_state.get('surprise', 0) * 1.5)
+                    # Stronger surprise effect based on emotional state
+                    surprise_factor = min(1.2, emotion_state.get('surprise', 0) * 1.8)
                     if idx in [0, 1, 2, 3]:  # Upper eyebrow points
-                        enhanced_seq[0, i, exp_start+amp_range] += 0.15 * surprise_factor
-                    brow_amp *= (1.0 + 0.3 * surprise_factor)
+                        # Raise eyebrows for surprise
+                        enhanced_seq[0, i, exp_start+amp_range] += 0.2 * surprise_factor
+                    brow_amp *= (1.0 + 0.4 * surprise_factor)
                 
-                # Add emphasis effect
-                brow_amp *= (1.0 + 0.25 * normalized_energy[i] * emotion_state.get('emphasis', 0.5))
+                # Add emphasis variation based on vocal tone (emphasis)
+                vocal_emphasis = emotion_state.get('emphasis', 0.5)
+                # Only apply stronger emphasis during actual speech
+                if normalized_energy[i] > 0.25:
+                    emphasis_factor = 0.3 * normalized_energy[i] * vocal_emphasis
+                    brow_amp *= (1.0 + emphasis_factor)
+                
                 amp_array[0, i, amp_range] = brow_amp
         
         # Apply amplification only to expression dimensions
-        exp_start = 197  # Based on the motion_feat_dim structure
         exp_end = exp_start + 63
         enhanced_seq[0, :, exp_start:exp_end] *= amp_array[0]
         

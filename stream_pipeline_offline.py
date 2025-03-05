@@ -164,11 +164,11 @@ class StreamSDK:
         # ======== Setup Audio2Motion (LMDM) ========
         x_s_info_0 = self.condition_handler.x_s_info_0
         # Add enhanced parameters for more realistic and emotional expressions
-        self.emotion_intensity = kwargs.get("emotion_intensity", 1.3)
-        self.noise_guidance = kwargs.get("noise_guidance", 0.25)
+        self.emotion_intensity = kwargs.get("emotion_intensity", 1.5)  # Increased for more expressive faces
+        self.noise_guidance = kwargs.get("noise_guidance", 0.3)  # Increased for more varied expressions
         # Reduce smoothing for more dynamic expressions
         if "smo_k_d" not in kwargs:
-            self.smo_k_d = 2  # Default to a lower value than the original 3
+            self.smo_k_d = 1  # Minimal smoothing for more responsive expressions
         
         self.audio2motion.setup(
             x_s_info_0, 
