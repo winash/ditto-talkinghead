@@ -6,11 +6,10 @@ Train a personalized digital twin from a video of a person speaking.
 This allows you to create a digital twin similar to Heygen.
 """
 
-import os
 import argparse
 import time
 from stream_pipeline_offline import StreamSDK
-from core.train.personalization import DigitalTwinTrainer
+from personalization import DigitalTwinTrainer
 
 def main():
     parser = argparse.ArgumentParser(description="Train a personalized digital twin from video")
