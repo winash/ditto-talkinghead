@@ -485,13 +485,7 @@ class Audio2Motion:
                 brow_amp = self.current_exp_amplification['brow']
                 
                 # Enhance surprise effect on eyebrows
-                if emotion_state.get('surprise', 0) > 0.6:
-                    # Stronger surprise effect based on emotional state
-                    surprise_factor = min(1.2, emotion_state.get('surprise', 0) * 1.8)
-                    if idx in [0, 1, 2, 3]:  # Upper eyebrow points
-                        # Raise eyebrows for surprise
-                        enhanced_seq[0, i, exp_start+amp_range] += 0.2 * surprise_factor
-                    brow_amp *= (1.0 + 0.4 * surprise_factor)
+
                 
                 # Add emphasis variation based on vocal tone (emphasis)
                 vocal_emphasis = emotion_state.get('emphasis', 0.5)
